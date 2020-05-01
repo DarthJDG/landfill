@@ -1,0 +1,576 @@
+<html>
+
+<head>
+
+	<script>
+
+		// Set this variable to change the number of rows. More than 5 is NOT recommended.
+
+		const numberOfRows = 4;
+
+		// Contains information about a position on the board. This information is generated once when the BoardManager is created. Having the structure
+		// separate simplifies the main loop in the Board class.
+
+		class BoardPosition {
+
+			// The position's number (1-based index)
+
+			value = 0;
+
+			// Details of the row the position is on.
+
+			row = 0;
+			rowStart = 0;
+			rowEnd = 0;
+
+			// Pointers to nearby BoardPosition objects
+
+			left = null;
+			right = null;
+			topLeft = null;
+			topRight = null;
+			bottomLeft = null;
+			bottomRight = null;
+
+			// The distance from the edge of the board in all directions.
+
+			distanceLeft = 0;
+			distanceRight = 0;
+			distanceTopLeft = 0;
+			distanceTopRight = 0;
+			distanceBottomLeft = 0;
+			distanceBottomRight = 0;
+
+			// Indicators whether to process this position in case of symmetry to cut down on the number of calculations and repeated solutions. All three axes
+			// go through the centre of the triangle and one of the vertices.
+			//
+			// TOP   - Line through the top of the triangle (position 1).
+			// LEFT  - Line through the leftmost position on the last row.
+			// RIGHT - Line through the rightmost position on the last row (position with the highest number).
+
+			topAxis = false;
+			leftAxis = false;
+			rightAxis = false;
+
+			// Pointers to the BoardPositions on the opposite side of the axes when this position is reflected.
+
+			topAxisMirror = null;
+			leftAxisMirror = null;
+			rightAxisMirror = null;
+
+			constructor(value, row, rowStart, rowEnd) {
+				this.value = value;
+				this.row = row;
+				this.rowStart = rowStart;
+				this.rowEnd = rowEnd;
+			}
+
+			// Calculates distances after initialisation. All nearby pointers must be assigned for the whole board before this is called.
+
+			updateDistances() {
+				let d, p;
+
+				d = 0; p = this.left; while (p) { p = p.left; d++ }; this.distanceLeft = d;
+				d = 0; p = this.right; while (p) { p = p.right; d++ }; this.distanceRight = d;
+				d = 0; p = this.topLeft; while (p) { p = p.topLeft; d++ }; this.distanceTopLeft = d;
+				d = 0; p = this.topRight; while (p) { p = p.topRight; d++ }; this.distanceTopRight = d;
+				d = 0; p = this.bottomLeft; while (p) { p = p.bottomLeft; d++ }; this.distanceBottomLeft = d;
+				d = 0; p = this.bottomRight; while (p) { p = p.bottomRight; d++ }; this.distanceBottomRight = d;
+			}
+
+			// Assigns all symmetry-related properties after initialisation. Distances must be calculated before this is called.
+
+			updateMirrors() {
+				let p;
+
+				if (this.distanceLeft <= this.distanceRight) this.topAxis = true;
+				if (this.distanceTopLeft <= this.distanceBottomRight) this.leftAxis = true;
+				if (this.distanceTopRight <= this.distanceBottomLeft) this.rightAxis = true;
+
+				if (this.topAxis) { p = this; while (p.distanceRight !== this.distanceLeft) p = p.right; this.topAxisMirror = p; }
+				if (this.leftAxis) { p = this; while (p.distanceBottomRight !== this.distanceTopLeft) p = p.bottomRight; this.leftAxisMirror = p; }
+				if (this.rightAxis) { p = this; while (p.distanceBottomLeft !== this.distanceTopRight) p = p.bottomLeft; this.rightAxisMirror = p; }
+			}
+		}
+
+		// Pre-calculated position information for a board with a certain number of rows. It must be passed on to the Board class when instantiated.
+
+		class BoardManager {
+
+			// Number of rows
+
+			rows = 0;
+
+			// List of BoardPosition objects
+
+			positions = [];
+
+			// The total number of positions on the board
+
+			maxPosition = 0;
+
+			constructor(rows) {
+				this.rows = rows;
+
+				// Create all BoardPosition objects
+
+				let start = 0;
+				let end = 0;
+				for (let row = 1; row <= rows; row++) {
+					start = end + 1;
+					end = start + row - 1;
+					for (let value = start; value <= end; value++) {
+						this.positions.push(new BoardPosition(value, row, start, end));
+					}
+					this.maxPosition = end;
+				}
+
+				// Link up nearby nodes
+
+				for (let p = 1; p <= this.maxPosition; p++) {
+					const pos = this.getPosition(p);
+
+					if (p > pos.rowStart) pos.left = this.getPosition(p - 1);
+					if (p < pos.rowEnd) pos.right = this.getPosition(p + 1);
+					if (pos.row > 1) {
+						if (p > pos.rowStart) pos.topLeft = this.getPosition(p - pos.row);
+						if (p < pos.rowEnd) pos.topRight = this.getPosition(p - pos.row + 1);
+					}
+					if (pos.row < this.rows) {
+						pos.bottomLeft = this.getPosition(p + pos.row);
+						pos.bottomRight = this.getPosition(p + pos.row + 1);
+					}
+				}
+
+				// Evaluate distances and mirrors
+
+				for (let p = 1; p <= this.maxPosition; p++) this.getPosition(p).updateDistances();
+				for (let p = 1; p <= this.maxPosition; p++) this.getPosition(p).updateMirrors();
+			}
+
+			// Returns the BoardPosition object by its number (p). Just to make sure there is no confusion between the 1-based position number and the 0-based
+			// array indices.
+
+			getPosition(p) { return this.positions[p - 1]; }
+
+		}
+
+		// The main class that stores and manipulates the board state and returns the solutions.
+
+		class Board {
+
+			// The BuildingManager object
+
+			bm = null;
+
+			// Board state stored as boolean values (false = empty)
+
+			board = [];
+
+			// Instantiates the board, must be called with BuildingManager set (bm). By default, the board is full. When an optional Board object is passed (b),
+			// its state will be copied into the new board.
+
+			constructor(bm, b = null) {
+				this.bm = bm;
+
+				if (b) {
+					this.board = b.board.slice();
+				} else {
+					for (let p = 1; p <= bm.maxPosition; p++) this.setPosition(p, true);
+				}
+			}
+
+			// Sets the state of a position by its number (p) to a boolean value (state).
+
+			setPosition(p, state) { this.board[p - 1] = state; }
+
+			// Returns true if there is a piece on a numbered position (p).
+
+			hasPiece(p) { return this.board[p - 1]; }
+
+			// Returns the total number of pieces on the board.
+
+			totalPieces() {
+				let count = 0;
+				this.board.forEach(state => count += state ? 1 : 0);
+				return count;
+			}
+
+			// Returns an array of all legal moves from a numbered position (p). If the board is full or no moves are possible, an empty array is returned.
+			// If an optional array is passed (resultArray) it will append the results to it instead of creating a new array.
+			//
+			// A move is an object of three position numbers in the form of { from, to, remove }. The property 'remove' is the piece that has been jumped over.
+
+			legalMovesFromPosition(p, resultArray = null) {
+				let moves = resultArray || [];
+
+				// If there is no piece here, there are no legal moves.
+				if (!this.hasPiece(p)) return moves;
+
+				const pos = this.bm.getPosition(p);
+
+				if (pos.left && pos.left.left && this.hasPiece(pos.left.value) && !this.hasPiece(pos.left.left.value)) moves.push({ from: p, to: pos.left.left.value, remove: pos.left.value });
+				if (pos.right && pos.right.right && this.hasPiece(pos.right.value) && !this.hasPiece(pos.right.right.value)) moves.push({ from: p, to: pos.right.right.value, remove: pos.right.value });
+				if (pos.topLeft && pos.topLeft.topLeft && this.hasPiece(pos.topLeft.value) && !this.hasPiece(pos.topLeft.topLeft.value)) moves.push({ from: p, to: pos.topLeft.topLeft.value, remove: pos.topLeft.value });
+				if (pos.topRight && pos.topRight.topRight && this.hasPiece(pos.topRight.value) && !this.hasPiece(pos.topRight.topRight.value)) moves.push({ from: p, to: pos.topRight.topRight.value, remove: pos.topRight.value });
+				if (pos.bottomLeft && pos.bottomLeft.bottomLeft && this.hasPiece(pos.bottomLeft.value) && !this.hasPiece(pos.bottomLeft.bottomLeft.value)) moves.push({ from: p, to: pos.bottomLeft.bottomLeft.value, remove: pos.bottomLeft.value });
+				if (pos.bottomRight && pos.bottomRight.bottomRight && this.hasPiece(pos.bottomRight.value) && !this.hasPiece(pos.bottomRight.bottomRight.value)) moves.push({ from: p, to: pos.bottomRight.bottomRight.value, remove: pos.bottomRight.value });
+
+				return moves;
+			}
+
+			// Returns an array of (almost) all legal moves on the board:
+			//
+			// - If the board is full, the first move is to remove one of the pieces. It is indicated by setting the move's 'from' and 'to' properties to 0.
+			//
+			// - If the board is symmetrical along one or more axes, a reduced set of moves will be returned to avoid mirrored solutions. Moving pieces from
+			//   positions with a smaller number is preferred.
+
+			legalMoves() {
+				let moves = [];
+				let pieces = this.totalPieces();
+
+				// Detect board symmetry to minimise cases
+
+				let topAxisSymmetry = true;
+				let leftAxisSymmetry = true;
+				let rightAxisSymmetry = true;
+
+				for (let p = 1; p <= this.bm.maxPosition; p++) {
+					const pos = this.bm.getPosition(p);
+
+					if (pos.topAxis && this.hasPiece(p) !== this.hasPiece(pos.topAxisMirror.value)) topAxisSymmetry = false;
+					if (pos.leftAxis && this.hasPiece(p) !== this.hasPiece(pos.leftAxisMirror.value)) leftAxisSymmetry = false;
+					if (pos.rightAxis && this.hasPiece(p) !== this.hasPiece(pos.rightAxisMirror.value)) rightAxisSymmetry = false;
+				}
+
+				// Enumerate all possible moves
+
+				for (let p = 1; p <= this.bm.maxPosition; p++) {
+					const pos = this.bm.getPosition(p);
+
+					if (topAxisSymmetry && !pos.topAxis) continue;
+					if (leftAxisSymmetry && !pos.leftAxis) continue;
+					if (rightAxisSymmetry && !pos.rightAxis) continue;
+
+					if (pieces === this.bm.maxPosition) {
+
+						// Board is full, the only legal move is to remove one piece
+						moves.push({ from: 0, to: 0, remove: p });
+
+					} else if (pieces > 1) {
+
+						// Add all possible moves from this position
+						this.legalMovesFromPosition(p, moves);
+
+					}
+				}
+
+				return moves;
+			}
+
+			// Updates board state by making a move (m).
+
+			move(m) {
+				if (m.from && m.to) {
+					this.setPosition(m.from, false);
+					this.setPosition(m.to, true);
+				}
+				this.setPosition(m.remove, false);
+			}
+
+			// Returns an array of all possible solutions (reduced by symmetry). A solution is an array of moves that can be applied to the board in order.
+			// If called on a full board, the first move will always remove the starting piece.
+			//
+			// Warning! This is a mega-recurring function with minimal effort and no regard to memory consumption or processing efficiency.
+
+			getSolutions() {
+				let solutions = [];
+
+				// Loop through all legal moves
+
+				this.legalMoves().forEach(m => {
+
+					// Create a copy of the current board make the move
+
+					const newBoard = new Board(this.bm, this);
+					newBoard.move(m);
+
+					if (newBoard.totalPieces() === 1) {
+
+						// If we have won the board after making this move, add this move to the solution stack
+
+						solutions.push([m]);
+
+					} else {
+
+						// Otherwise, get the solutions of the new board and prepend this move to them
+
+						newBoard.getSolutions().forEach(solution => {
+							solution.unshift(m);
+							solutions.push(solution);
+						});
+
+					}
+				});
+
+				return solutions;
+			}
+
+		}
+
+		//
+		// All that's left is to instantiate our objects and get all possible solutions.
+		//
+
+		let bm = new BoardManager(numberOfRows);
+		let b = new Board(bm);
+		const solutions = b.getSolutions();
+
+		//
+		// Everything below this line is just horribly inefficient data processing and rendering code.
+		//
+
+		function getSortedSolutions(solutions) {
+			const index = {};
+			const groups = [];
+
+			solutions.forEach(solution => {
+				const moves = [];
+				let streak = 1;
+				let longestStreak = 1;
+				let start, group;
+
+				let lastTarget = 0;
+				solution.forEach(move => {
+					if (!move.from && !move.to) {
+						// Initial move to remove a piece
+						start = move.remove;
+					} else if (lastTarget === move.from) {
+						// Part of a single move
+						moves[moves.length - 1] += '-' + move.to;
+						streak++;
+						if (streak > longestStreak) longestStreak = streak;
+					} else {
+						// New move
+						moves.push(move.from + '-' + move.to);
+						streak = 1;
+					}
+					lastTarget = move.to;
+				});
+
+				// Add solution to a group
+
+				if (index[start]) {
+					group = index[start];
+					if (moves.length < group.shortest) group.shortest = moves.length;
+					if (moves.length > group.longest) group.longest = moves.length;
+					if (longestStreak > group.streak) group.streak = longestStreak;
+					group.solutions.push({
+						streak: longestStreak,
+						moves: moves
+					});
+				} else {
+					group = {
+						start: start,
+						shortest: moves.length,
+						longest: moves.length,
+						streak: longestStreak,
+						solutions: [{
+							steak: longestStreak,
+							moves: moves
+						}]
+					};
+					index[start] = group;
+					groups.push(group);
+				}
+			});
+
+			const result = {
+				shortest: groups.length ? groups[0].shortest : 0,
+				longest: groups.length ? groups[0].longest : 0,
+				streak: groups.length ? groups[0].streak : 0,
+				groups: groups
+			};
+
+			result.groups.forEach(group => {
+				if (group.shortest < result.shortest) result.shortest = group.shortest;
+				if (group.longest > result.longest) result.longest = group.longest;
+				if (group.streak > result.streak) result.streak = group.streak;
+
+				group.solutions.sort((a, b) => b.streak - a.streak);
+				group.solutions.sort((a, b) => a.moves.length - b.moves.length);
+			});
+
+			result.groups.sort((a, b) => b.streak - a.streak);
+			result.groups.sort((a, b) => a.shortest - b.shortest);
+
+			return result;
+		}
+
+		function showBoard(b, startPosition = 0) {
+			let output = '<div class="container">';
+			let cls;
+
+			// Add mirrored positions
+			const mirrored = [];
+			if (startPosition) {
+				const pos = b.bm.getPosition(startPosition);
+				mirrored.push(pos.topAxisMirror && pos.topAxisMirror.value);
+				mirrored.push(pos.topAxisMirror && pos.topAxisMirror.topAxisMirror && pos.topAxisMirror.topAxisMirror.value);
+				mirrored.push(pos.topAxisMirror && pos.topAxisMirror.leftAxisMirror && pos.topAxisMirror.leftAxisMirror.value);
+				mirrored.push(pos.topAxisMirror && pos.topAxisMirror.rightAxisMirror && pos.topAxisMirror.rightAxisMirror.value);
+				mirrored.push(pos.leftAxisMirror && pos.leftAxisMirror.value);
+				mirrored.push(pos.leftAxisMirror && pos.leftAxisMirror.topAxisMirror && pos.leftAxisMirror.topAxisMirror.value);
+				mirrored.push(pos.leftAxisMirror && pos.leftAxisMirror.leftAxisMirror && pos.leftAxisMirror.leftAxisMirror.value);
+				mirrored.push(pos.leftAxisMirror && pos.leftAxisMirror.rightAxisMirror && pos.leftAxisMirror.rightAxisMirror.value);
+				mirrored.push(pos.rightAxisMirror && pos.rightAxisMirror.value);
+				mirrored.push(pos.rightAxisMirror && pos.rightAxisMirror.topAxisMirror && pos.rightAxisMirror.topAxisMirror.value);
+				mirrored.push(pos.rightAxisMirror && pos.rightAxisMirror.leftAxisMirror && pos.rightAxisMirror.leftAxisMirror.value);
+				mirrored.push(pos.rightAxisMirror && pos.rightAxisMirror.rightAxisMirror && pos.rightAxisMirror.rightAxisMirror.value);
+			}
+
+			let start = 0;
+			let end = 0;
+			for (let row = 1; row <= b.bm.rows; row++) {
+				start = end + 1;
+				end = start + row - 1;
+				for (let value = start; value <= end; value++) {
+					cls = 'pos';
+					if (value === startPosition) {
+						cls += ' start';
+					} else if (mirrored.indexOf(value) !== -1) {
+						cls += ' mirror';
+					}
+					output += '<span class="' + cls + '">' + value + '</span>';
+				}
+				output += '<br>';
+			}
+
+			output += '</div><br><br>';
+
+			document.write(output);
+		}
+
+		let result = getSortedSolutions(solutions);
+
+		document.write('<h1 style="text-align: left;">Legend</h1><span class="pos">&nbsp;</span> Position on board<br> <span class="pos start">&nbsp;</span> Empty starting position for solutions<br> <span class="pos mirror">&nbsp;</span> Alternative starting positions by mirroring');
+
+		if (!result.groups.length) {
+			document.write('<h1>No solutions found.</h1>');
+			showBoard(b);
+		} else {
+
+			result.groups.forEach(group => {
+				document.write('<h1>Starting position ' + group.start + '</h1>');
+				showBoard(b, group.start);
+
+				group.solutions.forEach((solution, index) => {
+					if (group.solutions.length > 100 && index > 20 && index < group.solutions.length - 20) {
+						if (index === 21) document.write('...<br><br>');
+						return;
+					}
+
+					document.write('Solution ' + (index + 1) + ':&nbsp;&nbsp;');
+					solution.moves.forEach(move => {
+						document.write('<span class="badge">' + move + '</span>');
+					});
+
+					if (solution.moves.length === result.shortest) {
+						document.write('<span class="badge short">Shortest solution (' + result.shortest + ' moves)</span>');
+					} else if (solution.moves.length === group.shortest) {
+						document.write('<span class="badge short group">Shortest in group (' + group.shortest + ' moves)</span>');
+					}
+
+					if (solution.moves.length === result.longest) {
+						document.write('<span class="badge long">Longest solution (' + result.longest + ' moves)</span>');
+					} else if (solution.moves.length === group.longest) {
+						document.write('<span class="badge long group">Longest in group (' + group.longest + ' moves)</span>');
+					}
+
+					if (solution.streak === result.streak) {
+						document.write('<span class="badge streak">Longest streak (' + result.streak + ' jumps)</span>');
+					} else if (solution.streak === group.streak) {
+						document.write('<span class="badge streak group">Longest streak in group (' + group.streak + ' moves)</span>');
+					}
+
+					document.write('<br><br>');
+				});
+			});
+
+		}
+
+	</script>
+
+	<style>
+		body {
+			font-family: sans-serif;
+			color: #444;
+			margin: 2em;
+		}
+
+		.container {
+			text-align: center;
+		}
+
+		.pos {
+			display: inline-block;
+			margin: 0.2em;
+			width: 2em;
+			padding: 0.45em 0;
+			text-align: center;
+			border: 4px solid #999;
+			background: #aaa;
+			color: #fff;
+			border-radius: 50%;
+		}
+
+		.pos.start {
+			border-color: #bb4444;
+			background: #bb6666;
+		}
+
+		.pos.mirror {
+			border-color: #ccaa44;
+			background: #ddbb66;
+		}
+
+		h1 {
+			text-align: center;
+		}
+
+		.badge {
+			display: inline-block;
+			background: #eee;
+			color: #000;
+			font-size: 80%;
+			padding: 0.2em 0.5em;
+			border-radius: 0.5em;
+			margin-right: 0.5em;
+		}
+
+		.badge.short {
+			background: green;
+			color: #fff;
+		}
+
+		.badge.long {
+			background: red;
+			color: #fff;
+		}
+
+		.badge.streak {
+			background: purple;
+			color: #fff;
+		}
+
+		.badge.group {
+			opacity: 0.6;
+		}
+	</style>
+
+</head>
+
+<body></body>
+
+</html>
